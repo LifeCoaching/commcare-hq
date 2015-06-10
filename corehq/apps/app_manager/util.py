@@ -137,15 +137,10 @@ class ParentCasePropertyBuilder(object):
 
     @memoized
     def get_properties(self, case_type, already_visited=(),
-                       include_shared_properties=True):
+                       include_shared_properties=True,
+                       include_parent_properties=True):
         if case_type in already_visited:
             return ()
-
-        get_properties_recursive = functools.partial(
-            self.get_properties,
-            already_visited=already_visited + (case_type,),
-            include_shared_properties=include_shared_properties
-        )
 
         case_properties = set(self.defaults) | set(self.per_type_defaults.get(case_type, []))
 
@@ -155,15 +150,23 @@ class ParentCasePropertyBuilder(object):
         parent_types, contributed_properties = \
             self.get_parent_types_and_contributed_properties(case_type)
         case_properties.update(contributed_properties)
-        for parent_type in parent_types:
-            for property in get_properties_recursive(parent_type[0]):
-                case_properties.add('%s/%s' % (parent_type[1], property))
+        if include_parent_properties:
+            get_properties_recursive = functools.partial(
+                self.get_properties,
+                already_visited=already_visited + (case_type,),
+                include_shared_properties=include_shared_properties
+            )
+            for parent_type in parent_types:
+                for property in get_properties_recursive(parent_type[0]):
+                    case_properties.add('%s/%s' % (parent_type[1], property))
         if self.app.case_sharing and include_shared_properties:
             from corehq.apps.app_manager.models import get_apps_in_domain
             for app in self.get_other_case_sharing_apps_in_domain():
                 case_properties.update(
                     get_case_properties(
-                        app, [case_type], include_shared_properties=False
+                        app, [case_type],
+                        include_shared_properties=False,
+                        include_parent_properties=include_parent_properties,
                     ).get(case_type, [])
                 )
         return case_properties
@@ -190,21 +193,29 @@ class ParentCasePropertyBuilder(object):
 
         return parent_map
 
-    def get_case_property_map(self, case_types, include_shared_properties=True):
+    def get_case_property_map(self, case_types,
+                              include_shared_properties=True,
+                              include_parent_properties=True):
         case_types = sorted(case_types)
         return {
             case_type: sorted(self.get_properties(
-                case_type, include_shared_properties=include_shared_properties
+                case_type,
+                include_shared_properties=include_shared_properties,
+                include_parent_properties=include_parent_properties,
             ))
             for case_type in case_types
         }
 
 
-def get_case_properties(app, case_types, defaults=(), include_shared_properties=True):
+def get_case_properties(app, case_types, defaults=(),
+                        include_shared_properties=True,
+                        include_parent_properties=True):
     per_type_defaults = get_per_type_defaults(app.domain, case_types)
     builder = ParentCasePropertyBuilder(app, defaults, per_type_defaults=per_type_defaults)
     return builder.get_case_property_map(
-        case_types, include_shared_properties=include_shared_properties
+        case_types,
+        include_shared_properties=include_shared_properties,
+        include_parent_properties=include_parent_properties,
     )
 
 
@@ -229,16 +240,49 @@ def is_usercase_in_use(domain_name):
     return domain and domain.usercase_enabled
 
 
-def get_all_case_properties(app):
+def get_all_case_properties(app, **kw):
     extra_types = set()
     if is_usercase_in_use(app.domain):
         extra_types.add(USERCASE_TYPE)
+    kw.setdefault('defaults', ('name',))
     return get_case_properties(
         app,
         set(itertools.chain.from_iterable(m.get_case_types() for m in app.modules)) | extra_types,
-        defaults=('name',)
+        **kw
     )
 
+
+def get_casedb_schema(app, form=None):
+    """Get case database schema
+
+    This lists all case types and their properties for the given app.
+    """
+    if form is None:
+        case_type = None
+    else:
+        # maybe overly simplistic for advanced modules,
+        # which may have more than one case type?
+        # currently this only affects the ordering of presented
+        # case types. should it do more than that?
+        case_type = form.get_module().case_type
+    def key(item):
+        """Sort form's module's case type first"""
+        ctype = item[0]
+        return (0 if ctype == case_type else 1), ctype
+    map = get_all_case_properties(app, include_parent_properties=False)
+    return {
+        "sourceUri": "jr://instance/casedb",
+        "defaultId": "casedb",
+        "initialQuery": "instance('casedb')/cases/case",
+        "name": "Cases",
+        # is there a definitive list of properties common to all cases?
+        "structure": {},
+        "subsets": [{
+            "name": ctype,
+            "filter": "[@case_type={}]".format(ctype),
+            "structure": {p: {} for p in props},
+        } for ctype, props in sorted(map.iteritems(), key=key)],
+    }
 
 def get_usercase_properties(app):
     # No need to check toggles.USER_AS_A_CASE. This function is only called
