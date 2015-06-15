@@ -118,6 +118,10 @@ class XPath(unicode):
     def int(a):
         return XPath(u'int({})'.format(a))
 
+    @staticmethod
+    def true():
+        return XPath(u'true()')
+
 
 class CaseSelectionXPath(XPath):
     selector = ''

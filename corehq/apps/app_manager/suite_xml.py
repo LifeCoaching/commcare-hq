@@ -1421,10 +1421,16 @@ class SuiteGenerator(SuiteGeneratorBase):
 
         entry.require_instance(*instances)
 
-    def get_userdata_autoselect(self, key, session_id, mode):
+    def get_location_assertions(self, key, session_id, mode):
         xpath = session_var(key, path='user/data')
+        property_exists = "{0} = 1".format(xpath.count())
+        case_count = CaseIDXPath(xpath).case().count()
+        case_exists = "{0} = 1".format(case_count)
+        assertions = [self.get_assertion(
+            XPath.if_(property_exists, case_exists, XPath.true()),
+            'case_autoload.{0}.case_missing'.format(mode),
+        )]
         datum = SessionDatum(id=session_id, function=xpath)
-        assertions = self.get_auto_select_assertions(xpath, mode, [key])
         return datum, assertions
 
     @property
@@ -1451,7 +1457,7 @@ class SuiteGenerator(SuiteGeneratorBase):
 
                 if self.app.commtrack_enabled:
                     from .models import AUTO_SELECT_LOCATION
-                    datum, assertions = self.get_userdata_autoselect(
+                    datum, assertions = self.get_location_assertions(
                         'commtrack-supply-point',
                         'supply_point_id',
                         AUTO_SELECT_LOCATION,
@@ -1700,6 +1706,12 @@ class SuiteGenerator(SuiteGeneratorBase):
                 'action': 'update_case'
             })
         return datums
+
+    def get_userdata_autoselect(self, key, session_id, mode):
+        xpath = session_var(key, path='user/data')
+        datum = SessionDatum(id=session_id, function=xpath)
+        assertions = self.get_auto_select_assertions(xpath, mode, [key])
+        return datum, assertions
 
     def get_auto_select_datums_and_assertions(self, action, auto_select, form):
         from corehq.apps.app_manager.models import AUTO_SELECT_USER, AUTO_SELECT_CASE, \
